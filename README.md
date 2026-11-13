@@ -16,6 +16,8 @@ Re-importing the same demo **updates** the existing rows instead of creating dup
 pip install demoparser2 requests python-dotenv
 ```
 
+Optional: install [Go](https://go.dev/dl/) for the fallback parser (see *Troubleshooting*).
+
 Put your Notion integration token and db refs in a `.env` file next to the script. See `.env.example`.
 
 `.env` is in `.gitignore`.
@@ -207,6 +209,8 @@ A common cause is configuring a **data-source (collection) id** instead of a **d
 **`HTTP 401 / 403`** - bad or missing token, or the integration is not connected to that database.
 
 **A player got no Performance row** - no *Spieler* row matched their SteamID64. `--dry-run` prints the SteamIDs found in the demo.
+
+**`NOTE: demoparser2 cannot read this demo (EntityNotFound)`** - some demos (seen on PRACC servers) break demoparser2 ([LaihoE/demoparser#339](https://github.com/LaihoE/demoparser/issues/339)). The script then switches by itself to `godemo/`, a small exporter built on [demoinfocs-golang](https://github.com/markus-wa/demoinfocs-golang), and the stats are computed exactly as before - on a demo both can read, the two give identical numbers. This needs Go installed; the first run downloads the Go modules and compiles, later runs are cached. Without Go the script stops with a message saying so.
 
 **Rate limits / flaky network** - handled: requests time out, are paced to ~3/s, and retry 429 and 5xx with exponential backoff.
 

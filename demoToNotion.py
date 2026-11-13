@@ -16,6 +16,7 @@ Usage:
 Requirements:
     pip install demoparser2 requests
     NOTION_TOKEN="secret_xxx"   # Internal Integration Token set as env var
+    Optional: Go, for demos demoparser2 cannot read (see GoDemoParser)
     The integration needs access to Matches/Maps/Performance/Gegner/Spieler
     (Notion: "..." menu on each DB -> Connections -> add your integration)
 
@@ -110,10 +111,11 @@ LIMITATIONS AND NOTES:
        pretty well to around 95% accuracy. Hence I deem it good enough.
 """
 
-import argparse, bisect, hashlib, math, os, sys, time, requests
+import argparse, bisect, hashlib, json, math, os, shutil, subprocess, sys, time, requests
 from datetime import date
 from collections import defaultdict
 from dotenv import load_dotenv
+import pandas as pd
 from demoparser2 import DemoParser
 
 load_dotenv()
@@ -458,11 +460,81 @@ def build_roster(parser, round_of_tick, stats):
 
 
 # --------------------------------------------------------------------------
+# Fallback parser (demoinfocs-golang)
+# --------------------------------------------------------------------------
+
+GO_PARSER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "godemo")
+
+
+class GoDemoParser:
+    """
+    Stand-in for DemoParser on demos demoparser2 cannot read: some fail every
+    event/tick call with EntityNotFound or MalformedMessage
+    (LaihoE/demoparser#339). godemo/ reads them with demoinfocs-golang and
+    exports exactly the events and tick values this script asks for, under
+    demoparser2's column names, so nothing downstream has to know.
+    Needs Go installed (https://go.dev/dl/).
+    """
+
+    def __init__(self, path, header):
+        if not shutil.which("go"):
+            raise RuntimeError(
+                "demoparser2 cannot read this demo and the Go fallback needs Go "
+                "installed (https://go.dev/dl/)."
+            )
+        print("Parsing with the Go fallback (demoinfocs-golang) ...")
+        proc = subprocess.run(
+            ["go", "run", ".", os.path.abspath(path)],
+            cwd=GO_PARSER_DIR, capture_output=True, text=True, encoding="utf-8",
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"Go fallback failed:\n{proc.stderr.strip()}")
+        data = json.loads(proc.stdout)
+        self._header = {**data["header"], **(header or {})}
+        self._events = data["events"]
+        self._ticks = pd.DataFrame(data["ticks"] or [])
+
+    def parse_header(self):
+        return self._header
+
+    def parse_event(self, name, player=None, other=None):
+        if name not in self._events:
+            raise KeyError(f"event {name} is not exported by the Go fallback")
+        rows = self._events[name]
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["tick"])
+
+    def parse_ticks(self, props, ticks=None):
+        cols = ["tick", "steamid", "name", *props]
+        if self._ticks.empty:
+            return pd.DataFrame(columns=cols)
+        df = self._ticks
+        if ticks is not None:
+            df = df[df["tick"].isin(set(ticks))]
+        return df[[c for c in cols if c in df.columns]].reset_index(drop=True)
+
+
+def open_parser(path):
+    """demoparser2, or the Go fallback when demoparser2 cannot read the demo."""
+    parser = DemoParser(path)
+    try:
+        header = parser.parse_header()
+    except Exception:
+        header = None
+    try:
+        parser.parse_event("round_end")
+        return parser
+    except Exception as exc:
+        print(f"NOTE: demoparser2 cannot read this demo ({exc}); "
+              f"see LaihoE/demoparser#339.")
+    return GoDemoParser(path, header)
+
+
+# --------------------------------------------------------------------------
 # Main parse
 # --------------------------------------------------------------------------
 
 def parse_demo(path: str) -> MapStats:
-    parser = DemoParser(path)
+    parser = open_parser(path)
     stats = MapStats()
 
     header = parser.parse_header()
